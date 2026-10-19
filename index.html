@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#155eef">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<title>現在地から半径を表示する地図</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui,-apple-system,"Segoe UI",sans-serif; color:#172033; background:#f5f7fb; }
+  header { padding:16px 18px 10px; background:white; border-bottom:1px solid #dce2eb; }
+  h1 { font-size:1.25rem; margin:0 0 5px; }
+  .sub { color:#586579; font-size:.9rem; }
+  main { max-width:1200px; margin:auto; padding:14px; }
+  .panel { background:white; border:1px solid #dce2eb; border-radius:14px; padding:14px; margin-bottom:12px; }
+  .controls { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:10px; align-items:end; }
+  .field { grid-column:span 3; min-width:0; }
+  .field.wide { grid-column:span 5; }
+  .field.full { grid-column:1/-1; }
+  label { display:block; font-size:.85rem; font-weight:650; margin-bottom:5px; }
+  input, select, button { font:inherit; }
+  input[type=number], input[type=text], select { width:100%; padding:10px; border:1px solid #cbd3df; border-radius:9px; background:white; }
+  input[type=range] { width:100%; }
+  .btns { display:flex; flex-wrap:wrap; gap:8px; }
+  button { border:1px solid #c7d0de; background:white; color:#172033; border-radius:9px; padding:10px 13px; cursor:pointer; font-weight:650; }
+  button.primary { background:#155eef; color:white; border-color:#155eef; }
+  button:hover { filter:brightness(.97); }
+  .status { font-size:.9rem; color:#475569; margin-top:9px; min-height:1.3em; }
+  #map { width:100%; height:min(66vh,680px); min-height:360px; border-radius:14px; border:1px solid #dce2eb; z-index:1; }
+  .hint { font-size:.82rem; color:#5d687a; margin:10px 2px 0; line-height:1.5; }
+  .stats { display:flex; gap:16px; flex-wrap:wrap; font-size:.92rem; }
+  .stats strong { color:#155eef; }
+  .radius-list { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:8px; }
+  .radius-row { display:flex; align-items:center; gap:8px; padding:8px; border:1px solid #dce2eb; border-radius:10px; background:#fbfcfe; }
+  .radius-row input[type=number] { min-width:0; flex:1; padding:8px; }
+  .radius-swatch { width:13px; height:13px; border-radius:50%; flex:0 0 13px; }
+  .circle-label { position:absolute; z-index:1000; display:inline-block; white-space:nowrap; padding:3px 7px; border:2px solid; border-radius:7px; background:rgba(255,255,255,.97); box-shadow:0 1px 5px rgba(15,23,42,.22); font-size:12px; font-weight:750; line-height:16px; transform:translate(-50%,-50%); pointer-events:none; }
+  .radius-row button { padding:7px 9px; }
+  @media(max-width:700px) {
+    .field,.field.wide { grid-column:span 6; }
+    .field.full { grid-column:1/-1; }
+    #map { height:58vh; min-height:330px; }
+  }
+  @media(max-width:420px) { .field,.field.wide { grid-column:1/-1; } main{padding:9px;} }
+</style>
+</head>
+<body>
+<header>
+  <h1>現在地から半径を表示する地図</h1>
+  <div class="sub">現在地または地図上の任意の地点を中心に、複数の半径の円を同時に表示します。</div>
+</header>
+<main>
+  <section class="panel">
+    <div class="controls">
+      <div class="field">
+        <label for="basemap">地図の種類</label>
+        <select id="basemap">
+          <option value="osm">OpenStreetMap</option>
+          <option value="hot">OpenStreetMap（地形・施設表示）</option>
+        </select>
+      </div>
+      <div class="field full">
+        <label>表示する半径（km）</label>
+        <div id="radiusList" class="radius-list"></div>
+        <div class="btns" style="margin-top:8px">
+          <button id="addRadius">＋ 半径を追加</button>
+        </div>
+      </div>
+      <div class="field full btns">
+        <button id="locate" class="primary">◎ 現在地を中心にする</button>
+        <button id="fit">円全体を表示</button>
+        <button id="google">Googleマップで中心を開く</button>
+        <button id="reset">初期表示に戻す</button>
+      </div>
+    </div>
+    <div id="status" class="status" role="status">地図をクリックすると、その地点を円の中心にできます。「現在地を中心にする」を押すと位置情報の許可を求めます。</div>
+  </section>
+  <section class="panel">
+    <div class="stats">
+      <span>中心座標：<strong id="coords">未設定</strong></span>
+      <span>表示中の半径：<strong id="radiusLabel">7 km</strong></span>
+      <span>最大半径の面積（概算）：<strong id="area">153.9 km²</strong></span>
+    </div>
+  </section>
+  <div id="map" aria-label="円を表示するインタラクティブ地図"></div>
+  <p class="hint">使い方：現在地ボタンを押すか、地図上をクリックして中心を設定します。半径は複数追加でき、それぞれ数値入力で変更できます。位置情報はブラウザーの許可が必要です。現在地取得は通常 HTTPS または localhost 上で動作します。地図データ © OpenStreetMap contributors。</p>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const map = L.map('map', { zoomControl: true }).setView([38.2682, 140.8694], 11); // 仙台を初期表示
+  const layers = {
+    osm: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }),
+    hot: L.tileLayer('https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors, Tiles style by Humanitarian OpenStreetMap Team'
+    })
+  };
+  layers.osm.addTo(map);
+  let center = null, marker = null;
+  let radii = [7];
+  let circles = [];
+  let circleLabels = []; // DOMラベル。円周上の地理座標に追従させる
+  const colors = ['#155eef','#e11d48','#059669','#d97706','#7c3aed','#0891b2','#4d7c0f','#c026d3'];
+  const status = $('status');
+  function renderRadiusInputs() {
+    const list = $('radiusList');
+    list.replaceChildren();
+    radii.forEach((value, index) => {
+      const row = document.createElement('div');
+      row.className = 'radius-row';
+      const swatch = document.createElement('span');
+      swatch.className = 'radius-swatch';
+      swatch.style.backgroundColor = colors[index % colors.length];
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = '0.1'; input.max = '500'; input.step = '0.1';
+      input.value = value; input.setAttribute('aria-label', `半径 ${index + 1}（km）`);
+      input.addEventListener('change', () => {
+        let n = Number(input.value);
+        if (!Number.isFinite(n)) n = 7;
+        n = Math.max(0.1, Math.min(500, n));
+        radii[index] = n;
+        renderRadiusInputs(); updateCircles();
+      });
+      const unit = document.createElement('span'); unit.textContent = 'km';
+      const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '削除';
+      remove.setAttribute('aria-label', `半径 ${index + 1} を削除`);
+      remove.disabled = radii.length === 1;
+      remove.addEventListener('click', () => {
+        if (radii.length <= 1) return;
+        radii.splice(index, 1); renderRadiusInputs(); updateCircles();
+      });
+      row.append(swatch, input, unit, remove);
+      list.append(row);
+    });
+  }
+  function positionLabels() {
+    if (!map || !map.getSize) return;
+    const size = map.getSize();
+    circleLabels.forEach(label => {
+      const circle = label._circle;
+      if (!circle || !circle.getLatLng || !circle.getRadius) { label.style.display = 'none'; return; }
+
+      // L.Circle は getLatLngs() で円周点を返さないため、中心と半径から
+      // 地表上の円周点を計算し、画面内に見えているライン上へラベルを置く。
+      const center = circle.getLatLng();
+      const radius = circle.getRadius();
+      const earthRadius = 6371008.8;
+      const angularDistance = radius / earthRadius;
+      const lat1 = center.lat * Math.PI / 180;
+      const lon1 = center.lng * Math.PI / 180;
+      const ring = [];
+      for (let bearing = 0; bearing < 360; bearing += 2) {
+        const brng = bearing * Math.PI / 180;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(angularDistance) + Math.cos(lat1) * Math.sin(angularDistance) * Math.cos(brng));
+        const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(angularDistance) * Math.cos(lat1), Math.cos(angularDistance) - Math.sin(lat1) * Math.sin(lat2));
+        ring.push(L.latLng(lat2 * 180 / Math.PI, ((lon2 * 180 / Math.PI + 540) % 360) - 180));
+      }
+
+      // 円周の線分を細かく調べ、現在の表示範囲内に見えている線上へラベルを置く。
+      const padX = Math.max(8, label.offsetWidth / 2 + 3);
+      const padY = Math.max(8, label.offsetHeight / 2 + 3);
+      const minX = padX, maxX = size.x - padX;
+      const minY = padY, maxY = size.y - padY;
+      let best = null;
+      const samplesPerSegment = 4;
+      for (let i = 0; i < ring.length; i++) {
+        const a = map.latLngToContainerPoint(ring[i]);
+        const b = map.latLngToContainerPoint(ring[(i + 1) % ring.length]);
+        for (let j = 0; j <= samplesPerSegment; j++) {
+          const t = j / samplesPerSegment;
+          const x = a.x + (b.x - a.x) * t;
+          const y = a.y + (b.y - a.y) * t;
+          if (x < minX || x > maxX || y < minY || y > maxY) continue;
+          const score = y + Math.abs(x - size.x / 2) * 0.001;
+          if (!best || score < best.score) best = { x, y, score };
+        }
+      }
+      if (best) {
+        label.style.left = `${best.x}px`;
+        label.style.top = `${best.y}px`;
+        label.style.display = 'block';
+      } else {
+        // 円周そのものが画面外なら、円周上に表示することはできないため隠す。
+        label.style.display = 'none';
+      }
+    });
+  }
+  map.on('move moveend zoom zoomend resize viewreset', positionLabels);
+  map.whenReady(() => requestAnimationFrame(positionLabels));
+  function updateCircles(fit=false) {
+    circles.forEach(c => map.removeLayer(c));
+    circleLabels.forEach(label => label.remove());
+    circles = [];
+    circleLabels = [];
+    const sorted = radii.map(Number).filter(n => Number.isFinite(n) && n > 0).sort((a,b) => a-b);
+    $('radiusLabel').textContent = sorted.map(n => `${n} km`).join('、');
+    const maxKm = sorted.length ? Math.max(...sorted) : 7;
+    $('area').textContent = `${(Math.PI * maxKm * maxKm).toLocaleString('ja-JP',{maximumFractionDigits:1})} km²（半径${maxKm}km）`;
+    if (center) {
+      // 大きい円を先に描画し、小さい円を上に重ねて見やすくする
+      sorted.slice().reverse().forEach(km => {
+        const originalIndex = radii.findIndex(r => Number(r) === km);
+        const color = colors[(originalIndex < 0 ? 0 : originalIndex) % colors.length];
+        const c = L.circle(center, { radius: km * 1000, color, weight:2.5, fillColor:color, fillOpacity:.09 }).addTo(map);
+        circles.push(c);
+        // 円の北端（円周ライン上）にラベルを配置する
+        const labelLat = c.getBounds().getNorth();
+        const label = document.createElement('div');
+        label.className = 'circle-label';
+        label.style.borderColor = color;
+        label.style.color = color;
+        label.textContent = `半径 ${km} km`;
+        label.dataset.lat = String(labelLat);
+        label.dataset.lng = String(center.lng);
+        label._circle = c;
+        map.getContainer().appendChild(label);
+        circleLabels.push(label);
+      });
+      if (marker) marker.setLatLng(center);
+      else marker = L.marker(center).addTo(map);
+      $('coords').textContent = `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`;
+      positionLabels();
+      if (fit && circles.length) {
+        const bounds = circles.reduce((b,c) => b.extend(c.getBounds()), circles[0].getBounds());
+        map.fitBounds(bounds, { padding:[20,20] });
+      }
+    } else {
+      $('coords').textContent = '未設定';
+      positionLabels();
+    }
+  }
+  function setCenter(latlng, message) {
+    center = L.latLng(latlng.lat, latlng.lng);
+    updateCircles(true);
+    status.textContent = message || '中心を設定しました。地図をクリックすると中心を変更できます。';
+  }
+  $('addRadius').addEventListener('click', () => {
+    if (radii.length >= 8) { status.textContent = '半径は最大8個まで追加できます。'; return; }
+    const next = radii.length ? Math.min(500, Math.max(...radii) + 3) : 7;
+    radii.push(Number(next.toFixed(1)));
+    renderRadiusInputs(); updateCircles();
+  });
+  map.on('click', e => setCenter(e.latlng, '地図をクリックした地点を中心に設定しました。'));
+  $('locate').addEventListener('click', () => {
+    if (!navigator.geolocation) { status.textContent = 'このブラウザーでは位置情報を利用できません。地図をクリックして中心を設定してください。'; return; }
+    status.textContent = '現在地を取得しています。ブラウザーの位置情報を許可してください…';
+    navigator.geolocation.getCurrentPosition(
+      p => setCenter({lat:p.coords.latitude, lng:p.coords.longitude},
+        `現在地を中心に設定しました（位置精度の目安：約${Math.round(p.coords.accuracy)}m）。`),
+      e => {
+        const messages = {1:'位置情報が許可されませんでした。ブラウザーの設定を確認するか、地図をクリックして中心を設定してください。',2:'現在地を取得できませんでした。少し時間をおいて再試行するか、地図をクリックしてください。',3:'位置情報の取得がタイムアウトしました。もう一度お試しください。'};
+        status.textContent = messages[e.code] || '現在地を取得できませんでした。';
+      },
+      { enableHighAccuracy:true, timeout:15000, maximumAge:60000 }
+    );
+  });
+  $('fit').addEventListener('click', () => {
+    if (circles.length) { const bounds = circles.reduce((b,c) => b.extend(c.getBounds()), circles[0].getBounds()); map.fitBounds(bounds, {padding:[20,20]}); }
+    else status.textContent = '先に現在地を取得するか、地図をクリックして中心を設定してください。';
+  });
+  $('google').addEventListener('click', () => {
+    if (!center) { status.textContent = '先に現在地を取得するか、地図をクリックして中心を設定してください。'; return; }
+    const url = `https://www.google.com/maps/@${center.lat},${center.lng},12z`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  });
+  $('reset').addEventListener('click', () => {
+    center = null;
+    if (marker) { map.removeLayer(marker); marker = null; }
+    circles.forEach(c => map.removeLayer(c)); circles = [];
+    circleLabels.forEach(label => label.remove()); circleLabels = [];
+    radii = [7]; renderRadiusInputs(); updateCircles();
+    map.setView([38.2682, 140.8694], 11);
+    status.textContent = '初期表示に戻しました。現在地ボタンまたは地図クリックで中心を設定してください。';
+  });
+  $('basemap').addEventListener('change', e => {
+    Object.values(layers).forEach(layer => map.removeLayer(layer));
+    layers[e.target.value].addTo(map);
+  });
+  renderRadiusInputs();
+  updateCircles();
+})();
+</script>
+<script>
+// HTTPS上で配信される場合にアプリ本体をキャッシュします。
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.warn('Service Worker登録失敗:', err));
+  });
+}
+</script>
+</body>
+</html>
